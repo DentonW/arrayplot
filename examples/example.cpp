@@ -20,6 +20,7 @@ int main() {
         for (size_t i = 0; i < wave.size(); ++i) {
             wave[i] = std::sin(static_cast<double>(i) * 0.05 + frame * 0.1);
         }
+
         aplot::plot1d("sine", wave.data(), wave.size());
 
 #ifdef ARRAYPLOT_HAVE_EIGEN

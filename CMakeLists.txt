@@ -62,17 +62,29 @@ if(ARRAYPLOT_BUILD_EXAMPLE)
     add_executable(arrayplot_example examples/example.cpp)
     target_link_libraries(arrayplot_example PRIVATE arrayplot_client)
 
+    # Prefer an existing install (e.g. vcpkg) since it's faster than fetching;
+    # fall back to pulling Eigen's source directly if none is found. Eigen is
+    # header-only and its own CMakeLists defines the Eigen3::Eigen target
+    # even when just add_subdirectory'd (via FetchContent), so no extra glue
+    # is needed either way -- disable its tests/docs so the fetch stays fast.
     find_package(Eigen3 CONFIG QUIET)
-    if(Eigen3_FOUND)
-        target_link_libraries(arrayplot_example PRIVATE Eigen3::Eigen)
-        target_compile_definitions(arrayplot_example PRIVATE ARRAYPLOT_HAVE_EIGEN)
-
-        add_executable(arrayplot_example_eigen examples/example_eigen.cpp)
-        target_link_libraries(arrayplot_example_eigen PRIVATE arrayplot_client Eigen3::Eigen)
-    else()
-        message(STATUS "arrayplot: Eigen3 not found via find_package -- example and example_eigen will skip "
-                        "the Eigen demo. Install it with 'vcpkg install eigen3' (and pass "
-                        "-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake), or point CMAKE_PREFIX_PATH at an existing "
-                        "Eigen install.")
+    if(NOT Eigen3_FOUND)
+        message(STATUS "arrayplot: Eigen3 not found via find_package -- fetching it instead (pinned to 3.4.0).")
+        set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
+        set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            eigen
+            GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+            GIT_TAG 3.4.0
+        )
+        FetchContent_MakeAvailable(eigen)
     endif()
+
+    target_link_libraries(arrayplot_example PRIVATE Eigen3::Eigen)
+    target_compile_definitions(arrayplot_example PRIVATE ARRAYPLOT_HAVE_EIGEN)
+
+    add_executable(arrayplot_example_eigen examples/example_eigen.cpp)
+    target_link_libraries(arrayplot_example_eigen PRIVATE arrayplot_client Eigen3::Eigen)
 endif()

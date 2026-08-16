@@ -10,6 +10,7 @@
 #include <d3d11.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -65,6 +66,21 @@ private:
 static PlotStore g_store;
 static std::atomic<bool> g_running{true};
 static std::atomic<int> g_connectionCount{0};
+
+// Single-hue sequential colormap (dark -> light blue) so heatmap intensity
+// reads as shade, not hue -- registered once, after ImPlot::CreateContext().
+static ImPlotColormap g_monoColormap = -1;
+
+static void RegisterMonoColormap() {
+    static const ImVec4 monoColors[] = {
+        ImVec4(0.03f, 0.19f, 0.42f, 1.0f),
+        ImVec4(0.13f, 0.44f, 0.71f, 1.0f),
+        ImVec4(0.42f, 0.68f, 0.84f, 1.0f),
+        ImVec4(0.78f, 0.86f, 0.94f, 1.0f),
+        ImVec4(0.97f, 0.98f, 1.00f, 1.0f),
+    };
+    g_monoColormap = ImPlot::AddColormap("arrayplot_mono", monoColors, IM_ARRAYSIZE(monoColors), false);
+}
 
 // ---------------- pipe server ----------------
 static bool ReadExact(HANDLE pipe, void* buf, size_t size) {
@@ -176,6 +192,7 @@ int main(int, char**) {
     ImGui::StyleColorsDark();
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+    RegisterMonoColormap();
 
     std::thread serverThread(PipeServerLoop);
     serverThread.detach(); // parked in ConnectNamedPipe; OS reclaims it on process exit
@@ -224,11 +241,20 @@ int main(int, char**) {
                     ImPlot::EndPlot();
                 }
             } else {
-                if (ImPlot::BeginPlot(name.c_str(), ImVec2(-1, -1), ImPlotFlags_NoLegend)) {
+                double dataMin = *std::min_element(entry.data.begin(), entry.data.end());
+                double dataMax = *std::max_element(entry.data.begin(), entry.data.end());
+                if (dataMin == dataMax) dataMax = dataMin + 1.0; // avoid a degenerate scale range
+
+                ImPlot::PushColormap(g_monoColormap);
+                if (ImPlot::BeginPlot(name.c_str(), ImVec2(-80, -1), ImPlotFlags_NoLegend)) {
                     ImPlot::PlotHeatmap(name.c_str(), entry.data.data(),
-                                         static_cast<int>(entry.rows), static_cast<int>(entry.cols));
+                                         static_cast<int>(entry.rows), static_cast<int>(entry.cols),
+                                         dataMin, dataMax);
                     ImPlot::EndPlot();
                 }
+                ImGui::SameLine();
+                ImPlot::ColormapScale("##scale", dataMin, dataMax, ImVec2(60, 0));
+                ImPlot::PopColormap();
             }
             ImGui::End();
         }

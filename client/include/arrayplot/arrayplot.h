@@ -7,6 +7,23 @@
 // is designed to be called from the Immediate Window mid-debug, or from a
 // conditional breakpoint (condition: `aplot::plot1d("x", arr, n), false`),
 // so it must never throw or block for long.
+//
+// Watch/Immediate window gotchas:
+//  1. The evaluator can only call functions that already exist as compiled,
+//     non-inlined symbols. If a plot*() overload was never actually called
+//     anywhere in your .cpp, it was never emitted, so there's nothing to
+//     call and you'll get "identifier is undefined". Force one instance
+//     near your breakpoint if needed, e.g. `if (false) aplot::plot1d(...);`
+//     -- Debug builds still emit real code for that line even though it
+//     never executes.
+//  2. The evaluator does not deduce template arguments, so calling the
+//     pointer-based `plot1d<T>` bare (no explicit `<double>`) fails the
+//     same way. Prefer `aplot::plot1d("name", myVector)` (a concrete,
+//     non-template overload for std::vector below) over
+//     `aplot::plot1d<double>("name", myVector.data(), myVector.size())` --
+//     the latter also tends to fail separately with "has no address" since
+//     .data()/.size() are themselves inline one-liners with no callable
+//     symbol unless something else in your program already uses them.
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -20,6 +37,7 @@
 #include <cstring>
 #include <mutex>
 #include <type_traits>
+#include <vector>
 
 #include "protocol.h"
 
@@ -115,6 +133,21 @@ inline void plot2d(const char* name, const T* data, size_t rows, size_t cols, bo
 template <typename T>
 inline void plot1d(const char* name, const T* data, size_t n) {
     plot2d(name, data, n, static_cast<size_t>(1), true);
+}
+
+// Concrete (non-template) std::vector overloads. These exist mainly for the
+// Watch/Immediate window: the native evaluator can't deduce template
+// arguments, and separately can't call trivial STL member functions like
+// .data()/.size() directly (they're usually stripped as unreferenced inline
+// symbols, giving "has no address"). Passing the vector itself lets the
+// extraction happen inside real compiled code instead, e.g.
+// `aplot::plot1d("sine", wave)` works from Watch where
+// `aplot::plot1d<double>("sine", wave.data(), wave.size())` does not.
+inline void plot1d(const char* name, const std::vector<double>& v) {
+    plot1d(name, v.data(), v.size());
+}
+inline void plot1d(const char* name, const std::vector<float>& v) {
+    plot1d(name, v.data(), v.size());
 }
 
 } // namespace aplot
