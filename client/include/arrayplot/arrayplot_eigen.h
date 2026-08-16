@@ -11,6 +11,9 @@
 
 #include "arrayplot.h"
 
+#include <complex>
+#include <string>
+
 namespace aplot {
 namespace detail {
 
@@ -55,5 +58,41 @@ inline void plot(const char* name, const Eigen::VectorXd& v) { detail::plot_dens
 inline void plot(const char* name, const Eigen::VectorXf& v) { detail::plot_dense(name, v); }
 inline void plot(const char* name, const Eigen::ArrayXXd& a) { detail::plot_dense(name, a); }
 inline void plot(const char* name, const Eigen::ArrayXXf& a) { detail::plot_dense(name, a); }
+
+// ---- complex matrices ----
+//
+// The wire protocol only carries real-valued float/double arrays, so a
+// complex matrix has to be decomposed into one or more real views. Each of
+// these sends its result under "<name> (<view>)", so it shows up as its own
+// window in the viewer. Call whichever view(s) you actually want; there's
+// no single "right" default (magnitude/phase is the usual choice for
+// signal-processing-style data, real/imag for e.g. debugging raw complex
+// arithmetic), so `plot()` on a complex matrix sends magnitude and phase --
+// call plot_real/plot_imag directly if that's not what you want instead.
+template <typename Derived>
+inline void plot_real(const char* name, const Eigen::MatrixBase<Derived>& m) {
+    detail::plot_dense((std::string(name) + " (real)").c_str(), m.real());
+}
+template <typename Derived>
+inline void plot_imag(const char* name, const Eigen::MatrixBase<Derived>& m) {
+    detail::plot_dense((std::string(name) + " (imag)").c_str(), m.imag());
+}
+template <typename Derived>
+inline void plot_magnitude(const char* name, const Eigen::MatrixBase<Derived>& m) {
+    detail::plot_dense((std::string(name) + " (mag)").c_str(), m.cwiseAbs());
+}
+template <typename Derived>
+inline void plot_phase(const char* name, const Eigen::MatrixBase<Derived>& m) {
+    detail::plot_dense((std::string(name) + " (phase)").c_str(),
+                        m.unaryExpr([](const typename Derived::Scalar& c) { return std::arg(c); }));
+}
+
+// Concrete overloads so `aplot::plot("name", complexMatrix)` works both from
+// code and from the Watch/Immediate window (same reasoning as the real
+// overloads above -- no template argument deduction needed).
+inline void plot(const char* name, const Eigen::MatrixXcd& m) { plot_magnitude(name, m); plot_phase(name, m); }
+inline void plot(const char* name, const Eigen::MatrixXcf& m) { plot_magnitude(name, m); plot_phase(name, m); }
+inline void plot(const char* name, const Eigen::VectorXcd& v) { plot_magnitude(name, v); plot_phase(name, v); }
+inline void plot(const char* name, const Eigen::VectorXcf& v) { plot_magnitude(name, v); plot_phase(name, v); }
 
 } // namespace aplot
