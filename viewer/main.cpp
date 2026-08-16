@@ -247,9 +247,16 @@ int main(int, char**) {
 
                 ImPlot::PushColormap(g_monoColormap);
                 if (ImPlot::BeginPlot(name.c_str(), ImVec2(-80, -1), ImPlotFlags_NoLegend)) {
+                    // Y is inverted so row 0 reads "0" at the top (image order) instead of
+                    // labeling the top edge with the row count.
+                    ImPlot::SetupAxes("col", "row", ImPlotAxisFlags_None, ImPlotAxisFlags_Invert);
+                    ImPlot::SetupAxisFormat(ImAxis_X1, "%.0f");
+                    ImPlot::SetupAxisFormat(ImAxis_Y1, "%.0f");
                     ImPlot::PlotHeatmap(name.c_str(), entry.data.data(),
                                          static_cast<int>(entry.rows), static_cast<int>(entry.cols),
-                                         dataMin, dataMax);
+                                         dataMin, dataMax, "%.1f",
+                                         ImPlotPoint(0.0, 0.0),
+                                         ImPlotPoint(static_cast<double>(entry.cols), static_cast<double>(entry.rows)));
                     ImPlot::EndPlot();
                 }
                 ImGui::SameLine();
