@@ -108,3 +108,7 @@ Client and viewer talk over a Windows named pipe (`\\.\pipe\arrayplot`), format 
 - Windows-only (the viewer uses Win32 + DirectX11).
 - The named pipe has no authentication -- it's built for local, single-user debugging, not as a network-facing service.
 - See [AI_DISCLAIMER.md](AI_DISCLAIMER.md) for how this codebase was produced.
+
+## License
+
+MIT -- see [LICENSE](LICENSE). Dear ImGui, ImPlot, and Eigen are fetched separately at build time and remain under their own licenses (MIT, MIT, and MPL2 respectively).
