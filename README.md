@@ -1,12 +1,12 @@
 # arrayplot
 
-Live plotting for C++ arrays and Eigen matrices from a Visual Studio debugging session -- no VSIX, no fragile debugger-visualizer API. A standalone viewer app renders whatever you send it, and you send data either from normal code or straight out of the Watch/Immediate window while stopped at a breakpoint.
+Live plotting for C++ arrays and Eigen matrices while debugging -- no VSIX, no fragile debugger-visualizer API. A standalone viewer app renders whatever you send it, and you send data either from normal code or (on Windows, in Visual Studio) straight out of the Watch/Immediate window while stopped at a breakpoint. Runs on both Windows and Linux.
 
 ## Why this exists
 
 Visual Studio's native debugger doesn't have a built-in way to graph array/matrix contents, and the extensions that try to add one (e.g. ArrayPlotter64) do so via VS's Concord debugger-engine API, which is fragile and sparsely documented -- that's the likely reason those extensions tend to be unstable.
 
-This takes a different approach: a tiny header-only client streams data over a local named pipe to a plain, separately-running `.exe` built on Dear ImGui + ImPlot. Nothing hooks into VS itself, so there's no extension to break across VS versions.
+This takes a different approach: a tiny header-only client streams data over a local IPC channel to a plain, separately-running viewer app built on Dear ImGui + ImPlot. Nothing hooks into VS (or gdb/lldb) itself, so there's no extension to break across debugger or VS versions.
 
 ## Features
 
@@ -14,8 +14,9 @@ This takes a different approach: a tiny header-only client streams data over a l
 - 2D heatmaps with a single-hue (dark-to-light blue) colormap, index-labeled axes, and a colorbar showing the actual value range
 - Eigen support: `MatrixXd`/`MatrixXf`, `VectorXd`/`VectorXf`, `ArrayXXd`/`ArrayXXf`, and arbitrary expressions (blocks, transposes, products, ...) via a generic template
 - Complex Eigen matrices (`MatrixXcd`/`MatrixXcf`, `VectorXcd`/`VectorXcf`): magnitude, phase, real, and imaginary views, sent as separate named windows
-- Callable from ordinary code, the Immediate/Watch window mid-debug, or a conditional breakpoint for continuous updates as a loop runs
-- Viewer is a normal `.exe` -- no VS extension install, works regardless of VS version
+- Windows: callable from ordinary code, the Immediate/Watch window mid-debug, or a conditional breakpoint for continuous updates as a loop runs
+- Linux: callable from ordinary code (gdb/lldb function-call support varies -- see [Linux notes](#linux-notes))
+- Viewer is a plain executable -- no VS extension install, works regardless of VS/debugger version
 
 ## Repository layout
 
@@ -29,7 +30,9 @@ arrayplot/
     arrayplot.h                       # header-only client: plot1d/plot2d, std::vector overloads
     arrayplot_eigen.h                 # Eigen support, incl. complex matrices
   viewer/
-    main.cpp                          # Dear ImGui + ImPlot viewer, named-pipe server
+    plot_store.h                      # shared: data store, message parsing, ImGui/ImPlot draw code
+    main_win32.cpp                    # Windows: Win32 + DirectX11 + named-pipe server
+    main_linux.cpp                    # Linux: GLFW + OpenGL3 + Unix-domain-socket server
   examples/
     example.cpp                       # sine wave + real Eigen matrix
     example_eigen.cpp                 # real + complex Eigen matrix demo
@@ -37,22 +40,38 @@ arrayplot/
 
 ## Building
 
-Requirements: Windows, Visual Studio with the C++ workload, CMake 3.20+, and internet access on first configure (CMake `FetchContent` pulls Dear ImGui and ImPlot from GitHub, and Eigen too if it isn't already found via `find_package`).
+Common requirements: CMake 3.20+, and internet access on first configure (CMake `FetchContent` pulls Dear ImGui, ImPlot, and (on Linux) GLFW from their repos, plus Eigen if it isn't already found via `find_package`).
 
-Open the folder in Visual Studio via `File > Open > CMake...` and point it at `CMakeLists.txt` -- VS's built-in CMake integration configures and generates automatically. Build targets:
+Build targets on both platforms:
 
 - `arrayplot_viewer` -- the standalone viewer app
 - `arrayplot_example` -- sine wave + real Eigen matrix demo
 - `arrayplot_example_eigen` -- real + complex Eigen matrix demo
 
+### Windows
+
+Requirements: Visual Studio with the C++ workload. Open the folder via `File > Open > CMake...` and point it at `CMakeLists.txt` -- VS's built-in CMake integration configures and generates automatically.
+
+### Linux
+
+Requirements: a C++17 compiler, and X11/OpenGL development headers for GLFW to build against, e.g. on Debian/Ubuntu:
+```bash
+sudo apt install libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev
+```
+Then:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build -j
+```
+
 ## Try it
 
 ```bash
-arrayplot_viewer.exe
+./arrayplot_viewer      # arrayplot_viewer.exe on Windows
 ```
 then, in another terminal:
 ```bash
-arrayplot_example_eigen.exe
+./arrayplot_example_eigen
 ```
 You should see line plots and heatmaps update live as the demo runs.
 
@@ -84,9 +103,9 @@ aplot::plot_magnitude("H", complexMatrix);
 aplot::plot_phase("H", complexMatrix);
 ```
 
-Calls silently no-op if `arrayplot_viewer.exe` isn't running.
+Calls silently no-op if `arrayplot_viewer` isn't running.
 
-## Plotting from the Watch/Immediate window
+## Plotting from the Watch/Immediate window (Windows/Visual Studio)
 
 You can call these functions interactively while stopped at a breakpoint, but VS's native expression evaluator has two limitations worth knowing about:
 
@@ -99,15 +118,21 @@ For a live-updating plot without single-stepping, set a breakpoint's **condition
 aplot::plot1d("x", myVector), false
 ```
 
+## Linux notes
+
+The client and viewer work the same way as on Windows, just over a Unix domain socket instead of a named pipe -- `aplot::plot1d(...)` / `aplot::plot(...)` calls from ordinary code work unchanged.
+
+The Watch/Immediate-window and conditional-breakpoint tricks above are VS-specific. gdb and lldb *can* call functions interactively (gdb: `call aplot::plot1d("x", myVector)`; lldb: `expr aplot::plot1d("x", myVector)`), and the same two caveats apply (the function must already be a real compiled symbol, and template arguments aren't deduced) -- but this hasn't been tried against real gdb/lldb sessions, only reasoned about, so treat it as a starting point rather than a verified workflow.
+
 ## Protocol
 
-Client and viewer talk over a Windows named pipe (`\\.\pipe\arrayplot`), format defined in `common/protocol.h`: a small binary header (name length, dtype, rows, cols, row-major flag, payload size) followed by the name and the raw data. Each distinct name becomes its own window in the viewer, updated in place on every call.
+Client and viewer talk over a local IPC channel defined in `common/protocol.h`: a Windows named pipe (`\\.\pipe\arrayplot`) on Windows, a Unix domain socket (`/tmp/arrayplot.sock`) on Linux. Message format is identical on both: a small binary header (name length, dtype, rows, cols, row-major flag, payload size) followed by the name and the raw data. Each distinct name becomes its own window in the viewer, updated in place on every call.
 
 ## Notes
 
-- Windows-only (the viewer uses Win32 + DirectX11).
-- The named pipe has no authentication -- it's built for local, single-user debugging, not as a network-facing service.
-- See [AI_DISCLAIMER.md](AI_DISCLAIMER.md) for how this codebase was produced.
+- Windows and Linux only (the viewer uses Win32 + DirectX11 on Windows, GLFW + OpenGL3 on Linux).
+- Neither transport has authentication -- this is built for local, single-user debugging, not as a network-facing service.
+- The Linux viewer/socket path is new and, unlike the Windows build, has not been compiled or run by the author -- see [AI_DISCLAIMER.md](AI_DISCLAIMER.md).
 
 ## License
 

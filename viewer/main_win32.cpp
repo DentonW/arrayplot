@@ -1,6 +1,7 @@
-// arrayplot_viewer: standalone Dear ImGui + ImPlot app. Runs a named-pipe
-// server (\\.\pipe\arrayplot) in a background thread and renders whatever
-// arrays/matrices arrive, keyed by name, live.
+// arrayplot_viewer (Windows): Dear ImGui + ImPlot over Win32 + DirectX11.
+// Runs a named-pipe server (\\.\pipe\arrayplot) in a background thread and
+// renders whatever arrays/matrices arrive, keyed by name, live. Shared
+// data-store/parsing/draw logic lives in plot_store.h.
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -10,16 +11,11 @@
 #include <d3d11.h>
 #include <windows.h>
 
-#include <algorithm>
-#include <atomic>
 #include <cstdio>
-#include <cstring>
-#include <map>
-#include <mutex>
-#include <string>
+#include <cstdint>
 #include <thread>
-#include <vector>
 
+#include "plot_store.h"
 #include "protocol.h"
 
 using namespace aplot;
@@ -40,111 +36,26 @@ static void CreateRenderTarget();
 static void CleanupRenderTarget();
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// ---------------- plot data store ----------------
-struct PlotEntry {
-    uint32_t rows = 0, cols = 0;
-    std::vector<double> data; // always normalized to row-major
-};
-
-class PlotStore {
-public:
-    void Update(const std::string& name, uint32_t rows, uint32_t cols, std::vector<double> rowMajorData) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        entries_[name] = PlotEntry{rows, cols, std::move(rowMajorData)};
-    }
-
-    std::map<std::string, PlotEntry> Snapshot() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return entries_;
-    }
-
-private:
-    std::mutex mutex_;
-    std::map<std::string, PlotEntry> entries_;
-};
-
-static PlotStore g_store;
-static std::atomic<bool> g_running{true};
-static std::atomic<int> g_connectionCount{0};
-
-// Single-hue sequential colormap (dark -> light blue) so heatmap intensity
-// reads as shade, not hue -- registered once, after ImPlot::CreateContext().
-static ImPlotColormap g_monoColormap = -1;
-
-static void RegisterMonoColormap() {
-    static const ImVec4 monoColors[] = {
-        ImVec4(0.03f, 0.19f, 0.42f, 1.0f),
-        ImVec4(0.13f, 0.44f, 0.71f, 1.0f),
-        ImVec4(0.42f, 0.68f, 0.84f, 1.0f),
-        ImVec4(0.78f, 0.86f, 0.94f, 1.0f),
-        ImVec4(0.97f, 0.98f, 1.00f, 1.0f),
-    };
-    g_monoColormap = ImPlot::AddColormap("arrayplot_mono", monoColors, IM_ARRAYSIZE(monoColors), false);
-}
-
 // ---------------- pipe server ----------------
-static bool ReadExact(HANDLE pipe, void* buf, size_t size) {
-    uint8_t* p = static_cast<uint8_t*>(buf);
-    size_t remaining = size;
-    while (remaining > 0) {
-        DWORD readBytes = 0;
-        if (!ReadFile(pipe, p, static_cast<DWORD>(remaining), &readBytes, nullptr) || readBytes == 0)
-            return false;
-        p += readBytes;
-        remaining -= readBytes;
-    }
-    return true;
-}
-
-static std::vector<double> ConvertAndNormalize(const MessageHeader& header, const std::vector<uint8_t>& raw) {
-    std::vector<double> values;
-    if (header.dtype == DType::Float64) {
-        size_t n = raw.size() / sizeof(double);
-        values.resize(n);
-        std::memcpy(values.data(), raw.data(), n * sizeof(double));
-    } else {
-        size_t n = raw.size() / sizeof(float);
-        values.resize(n);
-        const float* f = reinterpret_cast<const float*>(raw.data());
-        for (size_t i = 0; i < n; ++i) values[i] = static_cast<double>(f[i]);
-    }
-
-    // Eigen defaults to column-major; normalize to row-major so the render
-    // code below never has to think about storage order.
-    if (!header.rowMajor && header.rows > 1 && header.cols > 1) {
-        std::vector<double> rowMajor(values.size());
-        for (uint32_t r = 0; r < header.rows; ++r)
-            for (uint32_t c = 0; c < header.cols; ++c)
-                rowMajor[static_cast<size_t>(r) * header.cols + c] = values[static_cast<size_t>(c) * header.rows + r];
-        return rowMajor;
-    }
-    return values;
-}
-
 static void HandleClient(HANDLE pipe) {
-    ++g_connectionCount;
-    for (;;) {
-        MessageHeader header{};
-        if (!ReadExact(pipe, &header, sizeof(header))) break;
-        if (header.magic != kProtocolMagic) break;
-        if (header.dataBytes > kMaxMessageBytes) break;
-
-        std::string name(header.nameLen, '\0');
-        if (header.nameLen > 0 && !ReadExact(pipe, name.data(), header.nameLen)) break;
-
-        std::vector<uint8_t> raw(static_cast<size_t>(header.dataBytes));
-        if (header.dataBytes > 0 && !ReadExact(pipe, raw.data(), raw.size())) break;
-
-        std::vector<double> normalized = ConvertAndNormalize(header, raw);
-        g_store.Update(name, header.rows, header.cols, std::move(normalized));
-    }
-    --g_connectionCount;
+    aplot_viewer::HandleClientGeneric([pipe](void* buf, size_t size) -> bool {
+        uint8_t* p = static_cast<uint8_t*>(buf);
+        size_t remaining = size;
+        while (remaining > 0) {
+            DWORD readBytes = 0;
+            if (!ReadFile(pipe, p, static_cast<DWORD>(remaining), &readBytes, nullptr) || readBytes == 0)
+                return false;
+            p += readBytes;
+            remaining -= readBytes;
+        }
+        return true;
+    });
     DisconnectNamedPipe(pipe);
     CloseHandle(pipe);
 }
 
 static void PipeServerLoop() {
-    while (g_running) {
+    while (aplot_viewer::g_running) {
         HANDLE pipe = CreateNamedPipeA(
             kPipeName,
             PIPE_ACCESS_INBOUND,
@@ -192,7 +103,7 @@ int main(int, char**) {
     ImGui::StyleColorsDark();
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
-    RegisterMonoColormap();
+    aplot_viewer::RegisterMonoColormap();
 
     std::thread serverThread(PipeServerLoop);
     serverThread.detach(); // parked in ConnectNamedPipe; OS reclaims it on process exit
@@ -224,47 +135,7 @@ int main(int, char**) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(340, 110), ImGuiCond_FirstUseEver);
-        ImGui::Begin("arrayplot");
-        ImGui::Text("Listening on %s", kPipeName);
-        ImGui::Text("Active connections: %d", g_connectionCount.load());
-        ImGui::End();
-
-        auto snapshot = g_store.Snapshot();
-        for (auto& [name, entry] : snapshot) {
-            ImGui::SetNextWindowSize(ImVec2(520, 380), ImGuiCond_FirstUseEver);
-            ImGui::Begin(name.c_str());
-            if (entry.rows <= 1 || entry.cols <= 1) {
-                if (ImPlot::BeginPlot(name.c_str(), ImVec2(-1, -1))) {
-                    ImPlot::PlotLine(name.c_str(), entry.data.data(), static_cast<int>(entry.data.size()));
-                    ImPlot::EndPlot();
-                }
-            } else {
-                double dataMin = *std::min_element(entry.data.begin(), entry.data.end());
-                double dataMax = *std::max_element(entry.data.begin(), entry.data.end());
-                if (dataMin == dataMax) dataMax = dataMin + 1.0; // avoid a degenerate scale range
-
-                ImPlot::PushColormap(g_monoColormap);
-                if (ImPlot::BeginPlot(name.c_str(), ImVec2(-80, -1), ImPlotFlags_NoLegend)) {
-                    // Y is inverted so row 0 reads "0" at the top (image order) instead of
-                    // labeling the top edge with the row count.
-                    ImPlot::SetupAxes("col", "row", ImPlotAxisFlags_None, ImPlotAxisFlags_Invert);
-                    ImPlot::SetupAxisFormat(ImAxis_X1, "%.0f");
-                    ImPlot::SetupAxisFormat(ImAxis_Y1, "%.0f");
-                    ImPlot::PlotHeatmap(name.c_str(), entry.data.data(),
-                                         static_cast<int>(entry.rows), static_cast<int>(entry.cols),
-                                         dataMin, dataMax, "%.1f",
-                                         ImPlotPoint(0.0, 0.0),
-                                         ImPlotPoint(static_cast<double>(entry.cols), static_cast<double>(entry.rows)));
-                    ImPlot::EndPlot();
-                }
-                ImGui::SameLine();
-                ImPlot::ColormapScale("##scale", dataMin, dataMax, ImVec2(60, 0));
-                ImPlot::PopColormap();
-            }
-            ImGui::End();
-        }
+        aplot_viewer::DrawFrame(kPipeName);
 
         ImGui::Render();
         const float clearColor[4] = { 0.06f, 0.06f, 0.08f, 1.0f };
@@ -276,7 +147,7 @@ int main(int, char**) {
         g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
     }
 
-    g_running = false;
+    aplot_viewer::g_running = false;
 
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

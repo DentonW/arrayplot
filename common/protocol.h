@@ -8,7 +8,8 @@
 namespace aplot {
 
 constexpr uint32_t kProtocolMagic = 0x504C4F54; // "PLOT"
-constexpr const char* kPipeName = R"(\\.\pipe\arrayplot)";
+constexpr const char* kPipeName = R"(\\.\pipe\arrayplot)";   // Windows named pipe
+constexpr const char* kSocketPath = "/tmp/arrayplot.sock";   // Unix domain socket (Linux/macOS)
 
 // Sanity cap so a corrupted/foreign message can't make the viewer try to
 // allocate an absurd amount of memory.

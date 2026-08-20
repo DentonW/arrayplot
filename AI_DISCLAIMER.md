@@ -5,9 +5,10 @@ The code in this repository was written by an AI coding assistant (Claude, Anthr
 ## What this means
 
 - All source under `client/`, `viewer/`, `examples/`, and `common/`, plus `CMakeLists.txt`, was AI-generated.
-- The assistant had no compiler or CMake available in its working environment. This has been compiled and verified as working by the user.
-- Dear ImGui, ImPlot, and Eigen are fetched from their upstream repositories at build time (CMake `FetchContent`) and are unmodified; their own licenses apply.
+- The assistant had no compiler or CMake available in its working environment. The Windows build (Win32 + DirectX11 viewer, named-pipe transport) has been compiled and verified as working by the user.
+- Linux support (the GLFW + OpenGL3 viewer in `viewer/main_linux.cpp`, the Unix-domain-socket transport in `arrayplot.h`, and the shared `viewer/plot_store.h` it was split out of) is newer and has *not* been compiled or run by anyone yet -- treat it as unverified until you've built it.
+- Dear ImGui, ImPlot, Eigen, and (on Linux) GLFW are fetched from their upstream repositories at build time (CMake `FetchContent`) and are unmodified; their own licenses apply.
 
 ## Before relying on this code
 
-Build it, run it, and review it yourself before using it for anything where correctness matters -- especially the debugger-integration workflow (Watch/Immediate window calls) and the named-pipe protocol between the client and viewer, which accepts local connections without any authentication and was written for single-user local debugging, not as a hardened service.
+Build it, run it, and review it yourself before using it for anything where correctness matters -- especially the debugger-integration workflow (Watch/Immediate window calls) and the IPC protocol between the client and viewer (named pipe on Windows, Unix domain socket on Linux), which accepts local connections without any authentication and was written for single-user local debugging, not as a hardened service.

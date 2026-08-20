@@ -8,7 +8,12 @@
 // conditional breakpoint (condition: `aplot::plot1d("x", arr, n), false`),
 // so it must never throw or block for long.
 //
-// Watch/Immediate window gotchas:
+// Transport is a Windows named pipe on Windows, a Unix domain socket
+// (kSocketPath, common/protocol.h) everywhere else -- picked automatically
+// via #ifdef _WIN32, no user-visible difference in the API.
+//
+// Watch/Immediate window gotchas (Visual Studio only -- not applicable to
+// gdb/lldb on Linux):
 //  1. The evaluator can only call functions that already exist as compiled,
 //     non-inlined symbols. If a plot*() overload was never actually called
 //     anywhere in your .cpp, it was never emitted, so there's nothing to
@@ -25,14 +30,6 @@
 //     .data()/.size() are themselves inline one-liners with no callable
 //     symbol unless something else in your program already uses them.
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <Windows.h>
-
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -41,12 +38,29 @@
 
 #include "protocol.h"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#else
+#include <cerrno>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
+
 namespace aplot {
 namespace detail {
 
 template <typename T> struct dtype_of;
 template <> struct dtype_of<double> { static constexpr DType value = DType::Float64; };
 template <> struct dtype_of<float>  { static constexpr DType value = DType::Float32; };
+
+#ifdef _WIN32
 
 // One shared connection per process (Meyer's singleton -- safe even though
 // this header-only function is defined in every translation unit that
@@ -104,6 +118,70 @@ private:
         }
     }
 };
+
+#else // POSIX (Linux/macOS): Unix domain socket instead of a named pipe.
+
+class PipeConnection {
+public:
+    bool Send(const MessageHeader& header, const char* name, const void* data) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!EnsureConnected()) return false;
+
+        bool ok = WriteAll(&header, sizeof(header)) &&
+                  WriteAll(name, header.nameLen) &&
+                  WriteAll(data, static_cast<size_t>(header.dataBytes));
+        if (!ok) Close();
+        return ok;
+    }
+
+private:
+    int fd_ = -1;
+    std::mutex mutex_;
+
+    bool EnsureConnected() {
+        if (fd_ >= 0) return true;
+
+        int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) return false;
+
+        sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        std::strncpy(addr.sun_path, kSocketPath, sizeof(addr.sun_path) - 1);
+
+        if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+            ::close(fd);
+            return false; // viewer isn't running -- caller no-ops
+        }
+        fd_ = fd;
+        return true;
+    }
+
+    bool WriteAll(const void* data, size_t size) {
+        if (size == 0) return true;
+        const uint8_t* p = static_cast<const uint8_t*>(data);
+        size_t remaining = size;
+        while (remaining > 0) {
+            ssize_t written = ::write(fd_, p, remaining);
+            if (written < 0) {
+                if (errno == EINTR) continue;
+                return false;
+            }
+            if (written == 0) return false;
+            p += static_cast<size_t>(written);
+            remaining -= static_cast<size_t>(written);
+        }
+        return true;
+    }
+
+    void Close() {
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+};
+
+#endif
 
 inline PipeConnection& Connection() {
     static PipeConnection conn;
