@@ -1,0 +1,6 @@
+#include "resource.h"
+
+// The lowest-ID icon in a module becomes the .exe's file icon (shown in
+// Explorer, the taskbar, Alt-Tab) by default; main_win32.cpp also loads it
+// explicitly for the window class so it's used consistently everywhere.
+IDI_APP_ICON ICON "arrayplot.ico"

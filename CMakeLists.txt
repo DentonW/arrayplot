@@ -56,6 +56,7 @@ target_link_libraries(arrayplot_client INTERFACE Threads::Threads)
 if(WIN32)
     set(ARRAYPLOT_VIEWER_SOURCES
         viewer/main_win32.cpp
+        viewer/arrayplot.rc
         ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
         ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
     )
@@ -86,7 +87,9 @@ else()
     set(ARRAYPLOT_VIEWER_LIBS glfw OpenGL::GL Threads::Threads)
 endif()
 
-add_executable(arrayplot_viewer ${ARRAYPLOT_VIEWER_SOURCES})
+# WIN32 selects the GUI subsystem (no console window) on Windows; CMake
+# ignores this keyword on other platforms, so it's harmless on Linux.
+add_executable(arrayplot_viewer WIN32 ${ARRAYPLOT_VIEWER_SOURCES})
 target_link_libraries(arrayplot_viewer PRIVATE imgui_implot ${ARRAYPLOT_VIEWER_LIBS})
 target_include_directories(arrayplot_viewer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/common

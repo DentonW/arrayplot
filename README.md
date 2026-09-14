@@ -24,6 +24,7 @@ This takes a different approach: a tiny header-only client streams data over a l
 arrayplot/
   CMakeLists.txt
   AI_DISCLAIMER.md
+  arrayplot.png                       # source app icon artwork
   common/
     protocol.h                        # wire format shared by client and viewer
   client/include/arrayplot/
@@ -33,6 +34,8 @@ arrayplot/
     plot_store.h                      # shared: data store, message parsing, ImGui/ImPlot draw code
     main_win32.cpp                    # Windows: Win32 + DirectX11 + named-pipe server
     main_linux.cpp                    # Linux: GLFW + OpenGL3 + Unix-domain-socket server
+    arrayplot.ico                     # Windows exe/window icon, generated from arrayplot.png
+    arrayplot.rc, resource.h          # Windows resource script embedding the icon
   examples/
     example.cpp                       # sine wave + real Eigen matrix
     example_eigen.cpp                 # real + complex Eigen matrix demo

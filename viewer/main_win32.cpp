@@ -17,6 +17,7 @@
 
 #include "plot_store.h"
 #include "protocol.h"
+#include "resource.h"
 
 using namespace aplot;
 
@@ -63,7 +64,9 @@ static void PipeServerLoop() {
             PIPE_UNLIMITED_INSTANCES,
             0, 1 << 20, 0, nullptr);
         if (pipe == INVALID_HANDLE_VALUE) {
-            std::fprintf(stderr, "arrayplot_viewer: CreateNamedPipeA failed (%lu)\n", GetLastError());
+            char msg[128];
+            std::snprintf(msg, sizeof(msg), "CreateNamedPipeA failed (error %lu).", GetLastError());
+            ::MessageBoxA(nullptr, msg, "arrayplot_viewer", MB_OK | MB_ICONERROR);
             break;
         }
 
@@ -77,9 +80,21 @@ static void PipeServerLoop() {
 }
 
 // ---------------- main ----------------
-int main(int, char**) {
-    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandleW(nullptr),
-                        nullptr, nullptr, nullptr, nullptr, L"arrayplot_viewer", nullptr };
+// WinMain (not main()) + the WIN32 flag on the CMake target together select
+// the GUI subsystem, so this runs without a console window. There's then no
+// stderr for diagnostics to go to, so startup failures below use a message
+// box instead of fprintf.
+int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+    // LoadImage (not the older LoadIcon) so each size is pulled directly
+    // from the matching frame already baked into arrayplot.ico instead of
+    // being scaled from a single 32x32 rendition.
+    HICON hIconBig = static_cast<HICON>(::LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
+                                                      32, 32, LR_DEFAULTCOLOR));
+    HICON hIconSmall = static_cast<HICON>(::LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
+                                                        16, 16, LR_DEFAULTCOLOR));
+
+    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, hInstance,
+                        hIconBig, nullptr, nullptr, nullptr, L"arrayplot_viewer", hIconSmall };
     ::RegisterClassExW(&wc);
     HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"arrayplot viewer", WS_OVERLAPPEDWINDOW,
                                  100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
@@ -87,11 +102,11 @@ int main(int, char**) {
     if (!CreateDeviceD3D(hwnd)) {
         CleanupDeviceD3D();
         ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
-        std::fprintf(stderr, "arrayplot_viewer: failed to create D3D11 device\n");
+        ::MessageBoxA(nullptr, "Failed to create a Direct3D 11 device.", "arrayplot_viewer", MB_OK | MB_ICONERROR);
         return 1;
     }
 
-    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
+    ::ShowWindow(hwnd, nCmdShow);
     ::UpdateWindow(hwnd);
 
     IMGUI_CHECKVERSION();
